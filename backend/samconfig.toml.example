@@ -1,0 +1,39 @@
+# SAM Config Template (copy this file to samconfig.toml and modify for your environment)
+
+version = 0.1
+
+[dev.deploy]
+[dev.deploy.parameters]
+stack_name = "essay-scoring-system-dev"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND"
+resolve_s3 = true
+
+[dev.build]
+[dev.build.parameters]
+use_container = false
+
+[staging.deploy]
+[staging.deploy.parameters]
+stack_name = "essay-scoring-system-staging"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND"
+resolve_s3 = true
+
+[staging.build]
+[staging.build.parameters]
+use_container = false
+
+[prod.deploy]
+[prod.deploy.parameters]
+stack_name = "essay-scoring-system-prod"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND"
+resolve_s3 = true
+
+[prod.build]
+[prod.build.parameters]
+use_container = false
