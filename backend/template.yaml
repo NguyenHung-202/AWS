@@ -1,0 +1,236 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Automated English Essay Scoring System Backend
+
+Globals:
+  Function:
+    Runtime: java17
+    Timeout: 60
+    MemorySize: 1024
+    Environment:
+      Variables:
+        AWS_REGION: !Ref AWS::Region
+
+Parameters:
+  GeminiApiKeyParam:
+    Type: String
+    Description: Name of SSM Parameter Store parameter for Gemini API Key
+    Default: /essay-scoring/gemini-api-key
+
+Resources:
+  RawBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub essay-scoring-raw-${AWS::AccountId}-${AWS::Region}
+
+  ResultBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub essay-scoring-result-${AWS::AccountId}-${AWS::Region}
+
+  EssayScoringQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: essay-scoring-queue
+
+  EssayScoringTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: essay-scoring-topic
+
+  EssaysTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Essays
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: essayId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: essayId
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: EssayScoringUserPool
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: EssayScoringWebClient
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+
+  GetPresignedUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: GetPresignedUrl
+      CodeUri: get-presigned-url/
+      Handler: com.essayscoring.GetPresignedUrlHandler::handleRequest
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref RawBucket
+      Environment:
+        Variables:
+          RAW_BUCKET_NAME: !Ref RawBucket
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /presigned-url
+            Method: post
+            RestApiId: !Ref ApiGateway
+
+  RouterStoreFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: RouterStore
+      CodeUri: router-store/
+      Handler: com.essayscoring.RouterStoreHandler::handleRequest
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref EssaysTable
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt EssayScoringTopic.TopicName
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt EssayScoringQueue.QueueName
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref EssaysTable
+          SNS_TOPIC_ARN: !Ref EssayScoringTopic
+          SQS_QUEUE_URL: !Ref EssayScoringQueue
+      Events:
+        GetEssays:
+          Type: Api
+          Properties:
+            Path: /essays
+            Method: get
+            RestApiId: !Ref ApiGateway
+        GetEssay:
+          Type: Api
+          Properties:
+            Path: /essays/{essayId}
+            Method: get
+            RestApiId: !Ref ApiGateway
+        CreateEssay:
+          Type: Api
+          Properties:
+            Path: /essays
+            Method: post
+            RestApiId: !Ref ApiGateway
+        UpdateEssay:
+          Type: Api
+          Properties:
+            Path: /essays/{essayId}
+            Method: put
+            RestApiId: !Ref ApiGateway
+
+  JobStarterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: JobStarter
+      CodeUri: job-starter/
+      Handler: com.essayscoring.JobStarterHandler::handleRequest
+      Policies:
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt EssayScoringStateMachine.Name
+      Environment:
+        Variables:
+          STATE_MACHINE_ARN: !Ref EssayScoringStateMachine
+          RAW_BUCKET_NAME: !Ref RawBucket
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt EssayScoringQueue.Arn
+            BatchSize: 1
+
+  AiEvaluatorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: AiEvaluator
+      CodeUri: ai-evaluator/
+      Handler: com.essayscoring.AiEvaluatorHandler::handleRequest
+      Policies:
+        - AmazonSSMReadOnlyAccess
+        - S3ReadPolicy:
+            BucketName: !Ref RawBucket
+        - S3WritePolicy:
+            BucketName: !Ref ResultBucket
+      Environment:
+        Variables:
+          GEMINI_API_KEY_PARAM: !Ref GeminiApiKeyParam
+          RAW_BUCKET_NAME: !Ref RawBucket
+          RESULT_BUCKET_NAME: !Ref ResultBucket
+
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Cors:
+        AllowMethods: "'POST,GET,PUT,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: "'*'"
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !GetAtt CognitoUserPool.Arn
+
+  EssayScoringStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: EssayScoringStateMachine
+      DefinitionUri: state-machine.asl.json
+      DefinitionSubstitutions:
+        AiEvaluatorFunctionArn: !GetAtt AiEvaluatorFunction.Arn
+        DynamoDBTableName: !Ref EssaysTable
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref AiEvaluatorFunction
+        - S3ReadPolicy:
+            BucketName: !Ref RawBucket
+        - TextractFullAccess
+        - DynamoDBCrudPolicy:
+            TableName: !Ref EssaysTable
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+  RawBucketName:
+    Description: S3 Raw Bucket Name
+    Value: !Ref RawBucket
+  ResultBucketName:
+    Description: S3 Result Bucket Name
+    Value: !Ref ResultBucket
+  EssaysTableName:
+    Description: DynamoDB Table Name
+    Value: !Ref EssaysTable
+  StateMachineArn:
+    Description: Step Functions State Machine ARN
+    Value: !Ref EssayScoringStateMachine
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref CognitoUserPool
+  CognitoUserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref CognitoUserPoolClient
+

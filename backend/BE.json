@@ -1,0 +1,40 @@
+{
+  "Comment": "Automated Essay Scoring State Machine",
+  "StartAt": "ExtractText",
+  "States": {
+    "ExtractText": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:textract:detectDocumentText",
+      "Parameters": {
+        "Document": {
+          "S3Object": {
+            "Bucket.$": "$.rawBucketName",
+            "Name.$": "$.fileKey"
+          }
+        }
+      },
+      "ResultPath": "$.textractResult",
+      "Next": "ProcessText"
+    },
+    "ProcessText": {
+      "Type": "Pass",
+      "Parameters": {
+        "essayText.$": "States.JsonToString($.textractResult)",
+        "userId.$": "$.userId",
+        "essayId.$": "$.essayId"
+      },
+      "ResultPath": "$.aiInput",
+      "Next": "EvaluateEssay"
+    },
+    "EvaluateEssay": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${AiEvaluatorFunctionArn}",
+        "Payload.$": "$.aiInput"
+      },
+      "ResultPath": "$.evaluation",
+      "End": true
+    }
+  }
+}
