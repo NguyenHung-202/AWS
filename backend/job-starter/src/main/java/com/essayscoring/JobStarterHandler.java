@@ -16,7 +16,10 @@ public class JobStarterHandler implements RequestHandler<SQSEvent, Void> {
 
     private static final String STATE_MACHINE_ARN = System.getenv("STATE_MACHINE_ARN");
     private static final String RAW_BUCKET_NAME = System.getenv("RAW_BUCKET_NAME");
-    private static final Region REGION = Region.of(System.getenv("AWS_REGION"));
+    private static final Region REGION = Region.of(
+            "true".equals(System.getenv("AWS_SAM_LOCAL")) ? "ap-southeast-1" :
+            System.getenv("AWS_REGION") != null && !System.getenv("AWS_REGION").isBlank() ? System.getenv("AWS_REGION") : "ap-southeast-1"
+    );
 
     private final SfnClient sfnClient;
     private final Gson gson;
@@ -34,10 +37,15 @@ public class JobStarterHandler implements RequestHandler<SQSEvent, Void> {
         for (SQSEvent.SQSMessage msg : event.getRecords()) {
             try {
                 JsonObject body = gson.fromJson(msg.getBody(), JsonObject.class);
-                String fileKey = body.get("fileKey").getAsString();
-                String userId = body.get("userId").getAsString();
-                String essayId = body.get("essayId").getAsString();
-                String filename = body.get("filename").getAsString();
+                String fileKey = getStringField(body, "fileKey");
+                String userId = getStringField(body, "userId");
+                String essayId = getStringField(body, "essayId");
+                String filename = getStringField(body, "filename", "fileName");
+                
+                if (fileKey == null || userId == null || essayId == null || filename == null) {
+                    context.getLogger().log("Missing required fields in SQS message");
+                    continue;
+                }
 
                 JsonObject input = new JsonObject();
                 input.addProperty("fileKey", fileKey);
@@ -57,6 +65,15 @@ public class JobStarterHandler implements RequestHandler<SQSEvent, Void> {
 
             } catch (Exception e) {
                 context.getLogger().log("Error processing message: " + e.getMessage());
+            }
+        }
+        return null;
+    }
+
+    private String getStringField(JsonObject json, String... fieldNames) {
+        for (String fieldName : fieldNames) {
+            if (json.has(fieldName) && !json.get(fieldName).isJsonNull()) {
+                return json.get(fieldName).getAsString();
             }
         }
         return null;

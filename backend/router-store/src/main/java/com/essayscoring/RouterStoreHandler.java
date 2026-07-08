@@ -23,7 +23,10 @@ public class RouterStoreHandler implements RequestHandler<APIGatewayProxyRequest
     private static final String DYNAMODB_TABLE = System.getenv("DYNAMODB_TABLE_NAME");
     private static final String SNS_TOPIC_ARN = System.getenv("SNS_TOPIC_ARN");
     private static final String SQS_QUEUE_URL = System.getenv("SQS_QUEUE_URL");
-    private static final Region REGION = Region.of(System.getenv("AWS_REGION"));
+    private static final Region REGION = Region.of(
+            "true".equals(System.getenv("AWS_SAM_LOCAL")) ? "ap-southeast-1" :
+            System.getenv("AWS_REGION") != null && !System.getenv("AWS_REGION").isBlank() ? System.getenv("AWS_REGION") : "ap-southeast-1"
+    );
 
     private final DynamoDbClient dynamoDbClient;
     private final SnsClient snsClient;
@@ -48,6 +51,14 @@ public class RouterStoreHandler implements RequestHandler<APIGatewayProxyRequest
 
     @Override
     public APIGatewayProxyResponseEvent handleRequest(APIGatewayProxyRequestEvent request, Context context) {
+        context.getLogger().log("AWS_SAM_LOCAL environment: " + System.getenv("AWS_SAM_LOCAL"));
+        context.getLogger().log("AWS_REGION environment: " + System.getenv("AWS_REGION"));
+        context.getLogger().log("DYNAMODB_TABLE_NAME environment: " + System.getenv("DYNAMODB_TABLE_NAME"));
+        context.getLogger().log("SQS_QUEUE_URL environment: " + System.getenv("SQS_QUEUE_URL"));
+        context.getLogger().log("Resolved region: " + REGION.toString());
+        context.getLogger().log("Resolved table name: " + DYNAMODB_TABLE);
+        context.getLogger().log("Resolved SQS URL: " + SQS_QUEUE_URL);
+
         String httpMethod = request.getHttpMethod();
         String path = request.getPath();
 
@@ -76,8 +87,10 @@ public class RouterStoreHandler implements RequestHandler<APIGatewayProxyRequest
     }
 
     private APIGatewayProxyResponseEvent getEssaysByUser(APIGatewayProxyRequestEvent request, Context context) {
-        JsonObject claims = gson.toJsonTree(request.getRequestContext().getAuthorizer().get("claims")).getAsJsonObject();
-        String userId = claims.get("sub").getAsString();
+        String userId = AuthContextHelper.extractUserId(request, gson).orElse(null);
+        if (userId == null || userId.isBlank()) {
+            return unauthorized();
+        }
 
         QueryRequest queryRequest = QueryRequest.builder()
                 .tableName(DYNAMODB_TABLE)
@@ -100,8 +113,10 @@ public class RouterStoreHandler implements RequestHandler<APIGatewayProxyRequest
 
     private APIGatewayProxyResponseEvent getEssayById(APIGatewayProxyRequestEvent request, Context context) {
         String essayId = request.getPath().split("/")[2];
-        JsonObject claims = gson.toJsonTree(request.getRequestContext().getAuthorizer().get("claims")).getAsJsonObject();
-        String userId = claims.get("sub").getAsString();
+        String userId = AuthContextHelper.extractUserId(request, gson).orElse(null);
+        if (userId == null || userId.isBlank()) {
+            return unauthorized();
+        }
 
         GetItemRequest getItemRequest = GetItemRequest.builder()
                 .tableName(DYNAMODB_TABLE)
@@ -128,15 +143,33 @@ public class RouterStoreHandler implements RequestHandler<APIGatewayProxyRequest
 
     private APIGatewayProxyResponseEvent createEssay(APIGatewayProxyRequestEvent request, Context context) {
         JsonObject body = gson.fromJson(request.getBody(), JsonObject.class);
-        JsonObject claims = gson.toJsonTree(request.getRequestContext().getAuthorizer().get("claims")).getAsJsonObject();
-        String userId = claims.get("sub").getAsString();
+        String userId = AuthContextHelper.extractUserId(request, gson).orElse(null);
+        if (userId == null || userId.isBlank()) {
+            return unauthorized();
+        }
         String essayId = UUID.randomUUID().toString();
+
+        String filename = null;
+        if (body.has("filename") && !body.get("filename").isJsonNull()) {
+            filename = body.get("filename").getAsString();
+        } else if (body.has("fileName") && !body.get("fileName").isJsonNull()) {
+            filename = body.get("fileName").getAsString();
+        }
+        
+        String fileKey = null;
+        if (body.has("fileKey") && !body.get("fileKey").isJsonNull()) {
+            fileKey = body.get("fileKey").getAsString();
+        }
+        
+        if (filename == null || filename.isBlank() || fileKey == null || fileKey.isBlank()) {
+            throw new IllegalArgumentException("Missing required fields: filename and fileKey");
+        }
 
         Map<String, AttributeValue> item = new HashMap<>();
         item.put("userId", AttributeValue.builder().s(userId).build());
         item.put("essayId", AttributeValue.builder().s(essayId).build());
-        item.put("filename", AttributeValue.builder().s(body.get("filename").getAsString()).build());
-        item.put("fileKey", AttributeValue.builder().s(body.get("fileKey").getAsString()).build());
+        item.put("filename", AttributeValue.builder().s(filename).build());
+        item.put("fileKey", AttributeValue.builder().s(fileKey).build());
         item.put("status", AttributeValue.builder().s("PROCESSING").build());
         item.put("createdAt", AttributeValue.builder().n(String.valueOf(Instant.now().toEpochMilli())).build());
 
@@ -148,10 +181,10 @@ public class RouterStoreHandler implements RequestHandler<APIGatewayProxyRequest
         dynamoDbClient.putItem(putItemRequest);
 
         JsonObject sqsMessage = new JsonObject();
-        sqsMessage.addProperty("fileKey", body.get("fileKey").getAsString());
+        sqsMessage.addProperty("fileKey", fileKey);
         sqsMessage.addProperty("userId", userId);
         sqsMessage.addProperty("essayId", essayId);
-        sqsMessage.addProperty("filename", body.get("filename").getAsString());
+        sqsMessage.addProperty("filename", filename);
 
         SendMessageRequest sendMsgRequest = SendMessageRequest.builder()
                 .queueUrl(SQS_QUEUE_URL)
@@ -168,8 +201,10 @@ public class RouterStoreHandler implements RequestHandler<APIGatewayProxyRequest
 
     private APIGatewayProxyResponseEvent updateEssay(APIGatewayProxyRequestEvent request, Context context) {
         String essayId = request.getPath().split("/")[2];
-        JsonObject claims = gson.toJsonTree(request.getRequestContext().getAuthorizer().get("claims")).getAsJsonObject();
-        String userId = claims.get("sub").getAsString();
+        String userId = AuthContextHelper.extractUserId(request, gson).orElse(null);
+        if (userId == null || userId.isBlank()) {
+            return unauthorized();
+        }
         JsonObject body = gson.fromJson(request.getBody(), JsonObject.class);
 
         Map<String, AttributeValueUpdate> updates = new HashMap<>();
@@ -234,6 +269,13 @@ public class RouterStoreHandler implements RequestHandler<APIGatewayProxyRequest
         snsClient.publish(publishRequest);
     }
 
+    private APIGatewayProxyResponseEvent unauthorized() {
+        return new APIGatewayProxyResponseEvent()
+                .withStatusCode(401)
+                .withBody("{\"error\":\"Unauthorized\"}")
+                .withHeaders(getCorsHeaders());
+    }
+
     private Map<String, Object> convertItemToMap(Map<String, AttributeValue> item) {
         Map<String, Object> map = new HashMap<>();
         for (Map.Entry<String, AttributeValue> entry : item.entrySet()) {
@@ -251,7 +293,7 @@ public class RouterStoreHandler implements RequestHandler<APIGatewayProxyRequest
         Map<String, String> headers = new HashMap<>();
         headers.put("Access-Control-Allow-Origin", "*");
         headers.put("Access-Control-Allow-Methods", "POST, GET, PUT, OPTIONS");
-        headers.put("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        headers.put("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Mock-User-Id");
         return headers;
     }
 }

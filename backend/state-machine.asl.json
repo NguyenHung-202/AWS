@@ -1,28 +1,7 @@
 {
   "Comment": "Automated Essay Scoring State Machine",
-  "StartAt": "ExtractText",
+  "StartAt": "EvaluateEssay",
   "States": {
-    "ExtractText": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::aws-sdk:textract:detectDocumentText",
-      "Parameters": {
-        "Document": {
-          "S3Object": {
-            "Bucket.$": "$.rawBucketName",
-            "Name.$": "$.fileKey"
-          }
-        }
-      },
-      "ResultPath": "$.textractResult",
-      "Next": "EvaluateEssay",
-      "Catch": [
-        {
-          "ErrorEquals": ["States.ALL"],
-          "Next": "HandleError",
-          "ResultPath": "$.error"
-        }
-      ]
-    },
     "EvaluateEssay": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
@@ -33,7 +12,7 @@
       "ResultSelector": {
         "evaluation.$": "$.Payload"
       },
-      "ResultPath": "$",
+      "ResultPath": "$.EvaluateOutput",
       "Next": "UpdateDynamoDB",
       "Catch": [
         {
@@ -69,16 +48,16 @@
             "S": "COMPLETED"
           },
           ":score": {
-            "N.$": "States.JsonToString($.evaluation.score)"
+            "N.$": "States.JsonToString($.EvaluateOutput.evaluation.score)"
           },
           ":feedback": {
-            "S.$": "$.evaluation.feedback"
+            "S.$": "$.EvaluateOutput.evaluation.feedback"
           },
           ":resultKey": {
-            "S.$": "$.evaluation.resultKey"
+            "S.$": "$.EvaluateOutput.evaluation.resultKey"
           },
           ":updatedAt": {
-            "N.$": "States.JsonToString(States.MathRandom(1000000000000, 9999999999999))"
+            "N.$": "States.JsonToString(States.MathRandom(1000000, 9999999))"
           }
         }
       },
@@ -122,7 +101,7 @@
             "S.$": "States.JsonToString($.error)"
           },
           ":updatedAt": {
-            "N.$": "States.JsonToString(States.MathRandom(1000000000000, 9999999999999))"
+            "N.$": "States.JsonToString(States.MathRandom(1000000, 9999999))"
           }
         }
       },

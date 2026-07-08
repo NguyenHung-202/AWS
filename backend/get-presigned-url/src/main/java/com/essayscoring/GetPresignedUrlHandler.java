@@ -21,7 +21,10 @@ import java.util.UUID;
 public class GetPresignedUrlHandler implements RequestHandler<APIGatewayProxyRequestEvent, APIGatewayProxyResponseEvent> {
 
     private static final String BUCKET_NAME = System.getenv("RAW_BUCKET_NAME");
-    private static final Region REGION = Region.of(System.getenv("AWS_REGION"));
+    private static final Region REGION = Region.of(
+            "true".equals(System.getenv("AWS_SAM_LOCAL")) ? "ap-southeast-1" :
+            System.getenv("AWS_REGION") != null && !System.getenv("AWS_REGION").isBlank() ? System.getenv("AWS_REGION") : "ap-southeast-1"
+    );
 
     private final S3Client s3Client;
     private final S3Presigner s3Presigner;
@@ -43,10 +46,28 @@ public class GetPresignedUrlHandler implements RequestHandler<APIGatewayProxyReq
     public APIGatewayProxyResponseEvent handleRequest(APIGatewayProxyRequestEvent request, Context context) {
         try {
             JsonObject body = gson.fromJson(request.getBody(), JsonObject.class);
-            String filename = body.get("filename").getAsString();
-            JsonObject claims = gson.toJsonTree(request.getRequestContext().getAuthorizer().get("claims")).getAsJsonObject();
-            String userId = claims.get("sub").getAsString();
+            String filename = null;
+            if (body.has("filename") && !body.get("filename").isJsonNull()) {
+                filename = body.get("filename").getAsString();
+            } else if (body.has("fileName") && !body.get("fileName").isJsonNull()) {
+                filename = body.get("fileName").getAsString();
+            }
             
+            if (filename == null || filename.isBlank()) {
+                return new APIGatewayProxyResponseEvent()
+                        .withStatusCode(400)
+                        .withBody("{\"error\":\"Missing filename or fileName field\"}")
+                        .withHeaders(getCorsHeaders());
+            }
+            
+            String userId = AuthContextHelper.extractUserId(request, gson).orElse(null);
+            if (userId == null || userId.isBlank()) {
+                return new APIGatewayProxyResponseEvent()
+                        .withStatusCode(401)
+                        .withBody("{\"error\":\"Unauthorized\"}")
+                        .withHeaders(getCorsHeaders());
+            }
+
             String fileKey = UUID.randomUUID().toString() + "_" + filename;
 
             PutObjectRequest objectRequest = PutObjectRequest.builder()
@@ -83,7 +104,7 @@ public class GetPresignedUrlHandler implements RequestHandler<APIGatewayProxyReq
         Map<String, String> headers = new HashMap<>();
         headers.put("Access-Control-Allow-Origin", "*");
         headers.put("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        headers.put("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        headers.put("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Mock-User-Id");
         return headers;
     }
 }

@@ -7,9 +7,6 @@ Globals:
     Runtime: java17
     Timeout: 60
     MemorySize: 1024
-    Environment:
-      Variables:
-        AWS_REGION: !Ref AWS::Region
 
 Parameters:
   GeminiApiKeyParam:
@@ -22,6 +19,18 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub essay-scoring-raw-${AWS::AccountId}-${AWS::Region}
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - "*"
+            AllowedMethods:
+              - "PUT"
+              - "GET"
+              - "POST"
+              - "HEAD"
+            AllowedHeaders:
+              - "*"
+            MaxAge: 3000
 
   ResultBucket:
     Type: AWS::S3::Bucket
@@ -32,6 +41,7 @@ Resources:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: essay-scoring-queue
+      VisibilityTimeout: 65 # 💡 Thêm dòng này để lớn hơn Timeout 60 giây của Lambda
 
   EssayScoringTopic:
     Type: AWS::SNS::Topic
@@ -97,6 +107,8 @@ Resources:
             Path: /presigned-url
             Method: post
             RestApiId: !Ref ApiGateway
+            Auth:
+              Authorizer: NONE
 
   RouterStoreFunction:
     Type: AWS::Serverless::Function
@@ -123,24 +135,33 @@ Resources:
             Path: /essays
             Method: get
             RestApiId: !Ref ApiGateway
+            Auth:
+              Authorizer: NONE
+              
         GetEssay:
           Type: Api
           Properties:
             Path: /essays/{essayId}
             Method: get
             RestApiId: !Ref ApiGateway
+            Auth:
+              Authorizer: CognitoAuthorizer
         CreateEssay:
           Type: Api
           Properties:
             Path: /essays
             Method: post
             RestApiId: !Ref ApiGateway
+            Auth:
+              Authorizer: CognitoAuthorizer
         UpdateEssay:
           Type: Api
           Properties:
             Path: /essays/{essayId}
             Method: put
             RestApiId: !Ref ApiGateway
+            Auth:
+              Authorizer: CognitoAuthorizer
 
   JobStarterFunction:
     Type: AWS::Serverless::Function
@@ -186,7 +207,7 @@ Resources:
       StageName: Prod
       Cors:
         AllowMethods: "'POST,GET,PUT,OPTIONS'"
-        AllowHeaders: "'Content-Type,Authorization'"
+        AllowHeaders: "'Content-Type,Authorization,X-Mock-User-Id'"
         AllowOrigin: "'*'"
       Auth:
         DefaultAuthorizer: CognitoAuthorizer
@@ -201,13 +222,13 @@ Resources:
       DefinitionUri: state-machine.asl.json
       DefinitionSubstitutions:
         AiEvaluatorFunctionArn: !GetAtt AiEvaluatorFunction.Arn
-        DynamoDBTableName: !Ref EssaysTable
+        DynamodbTableName: !Ref EssaysTable
       Policies:
         - LambdaInvokePolicy:
             FunctionName: !Ref AiEvaluatorFunction
         - S3ReadPolicy:
             BucketName: !Ref RawBucket
-        - TextractFullAccess
+        - arn:aws:iam::aws:policy/AmazonTextractFullAccess
         - DynamoDBCrudPolicy:
             TableName: !Ref EssaysTable
 
@@ -233,4 +254,3 @@ Outputs:
   CognitoUserPoolClientId:
     Description: Cognito User Pool Client ID
     Value: !Ref CognitoUserPoolClient
-

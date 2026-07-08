@@ -24,8 +24,11 @@ public class AiEvaluatorHandler implements RequestHandler<Map<String, Object>, M
 
     private static final String GEMINI_API_KEY_PARAM = System.getenv("GEMINI_API_KEY_PARAM");
     private static final String RESULT_BUCKET_NAME = System.getenv("RESULT_BUCKET_NAME");
-    private static final Region REGION = Region.of(System.getenv("AWS_REGION"));
-    private static final String GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+    private static final Region REGION = Region.of(
+            "true".equals(System.getenv("AWS_SAM_LOCAL")) ? "ap-southeast-1" :
+            System.getenv("AWS_REGION") != null && !System.getenv("AWS_REGION").isBlank() ? System.getenv("AWS_REGION") : "ap-southeast-1"
+    );
+    private static final String GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
 
     private final SsmClient ssmClient;
     private final S3Client s3Client;
@@ -48,10 +51,23 @@ public class AiEvaluatorHandler implements RequestHandler<Map<String, Object>, M
     @Override
     public Map<String, Object> handleRequest(Map<String, Object> input, Context context) {
         try {
-            Map<String, Object> textractResult = (Map<String, Object>) input.get("textractResult");
-            String essayText = extractTextFromTextract(textractResult);
             String userId = (String) input.get("userId");
             String essayId = (String) input.get("essayId");
+            String fileKey = (String) input.get("fileKey");
+            
+            String rawBucketName = System.getenv("RAW_BUCKET_NAME");
+            if (rawBucketName == null || rawBucketName.isBlank()) {
+                rawBucketName = (String) input.get("rawBucketName");
+            }
+
+            software.amazon.awssdk.services.s3.model.GetObjectRequest getObjectRequest = 
+                    software.amazon.awssdk.services.s3.model.GetObjectRequest.builder()
+                            .bucket(rawBucketName)
+                            .key(fileKey)
+                            .build();
+                            
+            String essayText = s3Client.getObject(getObjectRequest, 
+                    software.amazon.awssdk.core.sync.ResponseTransformer.toBytes()).asUtf8String();
 
             String apiKey = getGeminiApiKey();
             String evaluationJson = evaluateEssay(essayText, apiKey);
@@ -73,25 +89,8 @@ public class AiEvaluatorHandler implements RequestHandler<Map<String, Object>, M
         } catch (Exception e) {
             context.getLogger().log("Error: " + e.getMessage());
             e.printStackTrace();
-            Map<String, Object> error = new HashMap<>();
-            error.put("status", "error");
-            error.put("message", e.getMessage());
-            return error;
+            throw new RuntimeException("Gemini API Error: " + e.getMessage(), e);
         }
-    }
-
-    private String extractTextFromTextract(Map<String, Object> textractResult) {
-        StringBuilder sb = new StringBuilder();
-        if (textractResult != null && textractResult.containsKey("Blocks")) {
-            JsonArray blocks = gson.toJsonTree(textractResult.get("Blocks")).getAsJsonArray();
-            for (int i = 0; i < blocks.size(); i++) {
-                JsonObject block = blocks.get(i).getAsJsonObject();
-                if ("LINE".equals(block.get("BlockType").getAsString()) && block.has("Text")) {
-                    sb.append(block.get("Text").getAsString()).append("\n");
-                }
-            }
-        }
-        return sb.toString();
     }
 
     private String getGeminiApiKey() {
