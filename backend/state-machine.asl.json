@@ -1,0 +1,112 @@
+{
+  "Comment": "Automated Essay Scoring State Machine",
+  "StartAt": "EvaluateEssay",
+  "States": {
+    "EvaluateEssay": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${AiEvaluatorFunctionArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "evaluation.$": "$.Payload"
+      },
+      "ResultPath": "$.EvaluateOutput",
+      "Next": "UpdateDynamoDB",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandleError",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "UpdateDynamoDB": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${DynamoDBTableName}",
+        "Key": {
+          "userId": {
+            "S.$": "$.userId"
+          },
+          "essayId": {
+            "S.$": "$.essayId"
+          }
+        },
+        "UpdateExpression": "SET #status = :status, #score = :score, #feedback = :feedback, #resultKey = :resultKey, #updatedAt = :updatedAt",
+        "ExpressionAttributeNames": {
+          "#status": "status",
+          "#score": "score",
+          "#feedback": "feedback",
+          "#resultKey": "resultKey",
+          "#updatedAt": "updatedAt"
+        },
+        "ExpressionAttributeValues": {
+          ":status": {
+            "S": "COMPLETED"
+          },
+          ":score": {
+            "N.$": "States.JsonToString($.EvaluateOutput.evaluation.score)"
+          },
+          ":feedback": {
+            "S.$": "$.EvaluateOutput.evaluation.feedback"
+          },
+          ":resultKey": {
+            "S.$": "$.EvaluateOutput.evaluation.resultKey"
+          },
+          ":updatedAt": {
+            "N.$": "States.JsonToString(States.MathRandom(1000000, 9999999))"
+          }
+        }
+      },
+      "ResultPath": "$.updateResult",
+      "Next": "SuccessState",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandleError",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "SuccessState": {
+      "Type": "Succeed"
+    },
+    "HandleError": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${DynamoDBTableName}",
+        "Key": {
+          "userId": {
+            "S.$": "$.userId"
+          },
+          "essayId": {
+            "S.$": "$.essayId"
+          }
+        },
+        "UpdateExpression": "SET #status = :status, #error = :error, #updatedAt = :updatedAt",
+        "ExpressionAttributeNames": {
+          "#status": "status",
+          "#error": "error",
+          "#updatedAt": "updatedAt"
+        },
+        "ExpressionAttributeValues": {
+          ":status": {
+            "S": "ERROR"
+          },
+          ":error": {
+            "S.$": "States.JsonToString($.error)"
+          },
+          ":updatedAt": {
+            "N.$": "States.JsonToString(States.MathRandom(1000000, 9999999))"
+          }
+        }
+      },
+      "ResultPath": "$.errorResult",
+      "End": true
+    }
+  }
+}

@@ -1,0 +1,4 @@
+Automated Essay Evaluation Test.
+This is a sample essay written to test the Automated English Essay Scoring System.
+It covers various themes such as artificial intelligence, serverless development, and modern user experiences.
+The system should evaluate this text using Google Gemini 1.5 Flash and return a score and feedback.
