@@ -92,7 +92,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: GetPresignedUrl
-      CodeUri: get-presigned-url/
+      CodeUri: get-presigned-url/target/get-presigned-url-1.0-SNAPSHOT.jar
       Handler: com.essayscoring.GetPresignedUrlHandler::handleRequest
       Policies:
         - S3WritePolicy:
@@ -114,7 +114,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: RouterStore
-      CodeUri: router-store/
+      CodeUri: router-store/target/router-store-1.0-SNAPSHOT.jar
       Handler: com.essayscoring.RouterStoreHandler::handleRequest
       Policies:
         - DynamoDBCrudPolicy:
@@ -167,7 +167,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: JobStarter
-      CodeUri: job-starter/
+      CodeUri: job-starter/target/job-starter-1.0-SNAPSHOT.jar
       Handler: com.essayscoring.JobStarterHandler::handleRequest
       Policies:
         - StepFunctionsExecutionPolicy:
@@ -187,7 +187,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: AiEvaluator
-      CodeUri: ai-evaluator/
+      CodeUri: ai-evaluator/target/ai-evaluator-1.0-SNAPSHOT.jar
       Handler: com.essayscoring.AiEvaluatorHandler::handleRequest
       Policies:
         - AmazonSSMReadOnlyAccess
